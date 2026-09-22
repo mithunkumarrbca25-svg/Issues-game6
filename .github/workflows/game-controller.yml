@@ -142,7 +142,7 @@ ${passMarker(game)}
               if (
                 !parsedUrl ||
                 parsedUrl.hostname.toLowerCase() !== 'github.com' ||
-                parts.length !== 5 ||
+                parts.length !== 4 ||
                 parts[0] === '' ||
                 parts[2] !== 'commit'
               ) {
