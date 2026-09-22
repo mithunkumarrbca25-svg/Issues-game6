@@ -1,8 +1,6 @@
 name: Issues Game 6 Controller
 
-on:
-  issue_comment:
-    types: [created]
+on: issue_comment
 
 permissions:
   issues: write
@@ -10,7 +8,6 @@ permissions:
 
 jobs:
   controller:
-    if: startsWith(github.event.comment.body, '/answer ')
     runs-on: ubuntu-latest
     env:
       GAME1_ANSWER: ${{ secrets.GAME1_ANSWER }}
@@ -22,8 +19,16 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const issueNumber = context.issue.number;
+            if (context.payload.action !== 'created') {
+              return;
+            }
+
             const body = context.payload.comment.body || '';
+            if (!body.startsWith('/answer ')) {
+              return;
+            }
+
+            const issueNumber = context.issue.number;
             const submittedBy = context.payload.comment.user.login;
             const rawBody = body;
             const isTesting = rawBody.split('\n').some(line => line.trim().toUpperCase() === 'TESTING');
