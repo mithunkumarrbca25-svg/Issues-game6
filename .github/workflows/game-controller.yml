@@ -26,6 +26,7 @@ jobs:
             const body = context.payload.comment.body || '';
             const submittedBy = context.payload.comment.user.login;
             const rawBody = body;
+            const isTesting = rawBody.split('\n').some(line => line.trim().toUpperCase() === 'TESTING');
 
             const gameByIssue = {
               1: 1,
@@ -66,6 +67,16 @@ jobs:
               return comments.some(c => (c.body || '').includes(passMarker(gameNum)));
             }
 
+            async function deleteTestingComment() {
+              if (isTesting) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: context.payload.comment.id
+                });
+              }
+            }
+
             let comments = [];
             if (game > 1) {
               comments = await issueComments(game - 1);
@@ -76,18 +87,12 @@ jobs:
                   issue_number: issueNumber,
                   body: `🔒 Game ${game} is locked. Complete Game ${game - 1} first.`
                 });
-                if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
-                  await github.rest.issues.deleteComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    comment_id: context.payload.comment.id
-                  });
-                }
+                await deleteTestingComment();
                 return;
               }
             }
 
-            const submittedAnswer = body.slice('/answer '.length).split(/\\r?\\n/)[0].trim();
+            const submittedAnswer = body.slice('/answer '.length).split('\n')[0].trim();
 
             if (game < 3) {
               const expected = answers[game];
@@ -98,13 +103,7 @@ jobs:
                   issue_number: issueNumber,
                   body: `❌ Not quite, ${submittedBy}. Check the challenge and try again.`
                 });
-                if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
-                  await github.rest.issues.deleteComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    comment_id: context.payload.comment.id
-                  });
-                }
+                await deleteTestingComment();
                 return;
               }
 
@@ -112,31 +111,67 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issueNumber,
-                body: `✅ Correct, ${submittedBy}! Game ${game} complete.\\n\\n${passMarker(game)}\\n\\n➡️ Game ${game + 1} is now unlocked: #${game + 1}`
+                body: `✅ Correct, ${submittedBy}! Game ${game} complete.
+
+${passMarker(game)}
+
+➡️ Game ${game + 1} is now unlocked: #${game + 1}`
               });
             } else {
-              const commitLine = body.match(/Commit:\s*(https:\\/\\/github\\.com\\/([^\\/]+)\\/([^\\/]+)\\/commit\\/([0-9a-fA-F]{7,40}))/i);
-
+              const commitLine = body.split('\n').find(line => line.trim().toLowerCase().startsWith('commit:'));
               if (!commitLine) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issueNumber,
-                  body: `❌ Game 3 needs a valid Commit: URL pointing to the commit that contains final-answer.txt.`
+                  body: '❌ Game 3 needs a valid Commit: URL pointing to the commit that contains final-answer.txt.'
                 });
-                if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
-                  await github.rest.issues.deleteComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    comment_id: context.payload.comment.id
-                  });
-                }
+                await deleteTestingComment();
                 return;
               }
 
-              const [, commitUrl, commitOwner, commitRepo, sha] = commitLine;
-              let commitData;
+              const commitUrl = commitLine.slice(commitLine.indexOf(':') + 1).trim();
+              let parsedUrl;
+              try {
+                parsedUrl = new URL(commitUrl);
+              } catch (error) {
+                parsedUrl = null;
+              }
 
+              const parts = parsedUrl ? parsedUrl.pathname.split('/').filter(Boolean) : [];
+              if (
+                !parsedUrl ||
+                parsedUrl.hostname.toLowerCase() !== 'github.com' ||
+                parts.length !== 5 ||
+                parts[0] === '' ||
+                parts[2] !== 'commit'
+              ) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: '❌ Game 3 needs a valid Commit: URL pointing to the commit that contains final-answer.txt.'
+                });
+                await deleteTestingComment();
+                return;
+              }
+
+              const commitOwner = parts[0];
+              const commitRepo = parts[1];
+              const sha = parts[3];
+
+              if (!/^[0-9a-fA-F]{7,40}$/.test(sha)) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: '❌ The Commit: URL contains an invalid commit SHA.'
+                });
+                await deleteTestingComment();
+                return;
+              }
+
+              let commitData;
               try {
                 const response = await github.rest.repos.getCommit({
                   owner: commitOwner,
@@ -149,15 +184,9 @@ jobs:
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issueNumber,
-                  body: `❌ I could not verify that commit. Make sure the URL points to a public GitHub commit.`
+                  body: '❌ I could not verify that commit. Make sure the URL points to a public GitHub commit.'
                 });
-                if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
-                  await github.rest.issues.deleteComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    comment_id: context.payload.comment.id
-                  });
-                }
+                await deleteTestingComment();
                 return;
               }
 
@@ -167,15 +196,9 @@ jobs:
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issueNumber,
-                  body: `❌ The linked commit does not contain final-answer.txt. Create that file in the commit you submit.`
+                  body: '❌ The linked commit does not contain final-answer.txt. Create that file in the commit you submit.'
                 });
-                if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
-                  await github.rest.issues.deleteComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    comment_id: context.payload.comment.id
-                  });
-                }
+                await deleteTestingComment();
                 return;
               }
 
@@ -186,13 +209,7 @@ jobs:
                   issue_number: issueNumber,
                   body: `❌ The answer is not correct yet, ${submittedBy}. Recheck the final clue.`
                 });
-                if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
-                  await github.rest.issues.deleteComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    comment_id: context.payload.comment.id
-                  });
-                }
+                await deleteTestingComment();
                 return;
               }
 
@@ -200,14 +217,12 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issueNumber,
-                body: `✅ Correct, ${submittedBy}! Game 3 complete. 🎉\\n\\n${passMarker(3)}\\n\\nYour event submission is now ready for organizer verification.`
+                body: `✅ Correct, ${submittedBy}! Game 3 complete. 🎉
+
+${passMarker(3)}
+
+Your event submission is now ready for organizer verification.`
               });
             }
 
-            if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
-              await github.rest.issues.deleteComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: context.payload.comment.id
-              });
-            }
+            await deleteTestingComment();
