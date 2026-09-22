@@ -43,7 +43,7 @@ jobs:
               '<!-- ISSUES-GAME6-PASS game=' + gameNum + ' user=' + submittedBy + ' -->';
 
             async function issueComments(number) {
-              const { data } = await github.paginate(
+              const data = await github.paginate(
                 github.rest.issues.listComments,
                 {
                   owner: context.repo.owner,
