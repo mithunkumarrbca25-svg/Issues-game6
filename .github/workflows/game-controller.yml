@@ -1,0 +1,213 @@
+name: Issues Game 6 Controller
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  controller:
+    if: startsWith(github.event.comment.body, '/answer ')
+    runs-on: ubuntu-latest
+    env:
+      GAME1_ANSWER: ${{ secrets.GAME1_ANSWER }}
+      GAME2_ANSWER: ${{ secrets.GAME2_ANSWER }}
+      GAME3_ANSWER: ${{ secrets.GAME3_ANSWER }}
+    steps:
+      - name: Check answer
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issueNumber = context.issue.number;
+            const body = context.payload.comment.body || '';
+            const submittedBy = context.payload.comment.user.login;
+            const rawBody = body;
+
+            const gameByIssue = {
+              1: 1,
+              2: 2,
+              3: 3
+            };
+
+            const game = gameByIssue[issueNumber];
+            if (!game) {
+              return;
+            }
+
+            const normalize = value => (value || '').trim().toLowerCase();
+
+            const answers = {
+              1: process.env.GAME1_ANSWER,
+              2: process.env.GAME2_ANSWER,
+              3: process.env.GAME3_ANSWER
+            };
+
+            const passMarker = gameNum =>
+              `<!-- ISSUES-GAME6-PASS game=${gameNum} user=${submittedBy} -->`;
+
+            async function issueComments(number) {
+              const { data } = await github.paginate(
+                github.rest.issues.listComments,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: number,
+                  per_page: 100
+                }
+              );
+              return data;
+            }
+
+            function hasPassed(gameNum) {
+              return comments.some(c => (c.body || '').includes(passMarker(gameNum)));
+            }
+
+            let comments = [];
+            if (game > 1) {
+              comments = await issueComments(game - 1);
+              if (!hasPassed(game - 1)) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: `🔒 Game ${game} is locked. Complete Game ${game - 1} first.`
+                });
+                if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
+                  await github.rest.issues.deleteComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: context.payload.comment.id
+                  });
+                }
+                return;
+              }
+            }
+
+            const submittedAnswer = body.slice('/answer '.length).split(/\\r?\\n/)[0].trim();
+
+            if (game < 3) {
+              const expected = answers[game];
+              if (normalize(submittedAnswer) !== normalize(expected)) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: `❌ Not quite, ${submittedBy}. Check the challenge and try again.`
+                });
+                if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
+                  await github.rest.issues.deleteComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: context.payload.comment.id
+                  });
+                }
+                return;
+              }
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body: `✅ Correct, ${submittedBy}! Game ${game} complete.\\n\\n${passMarker(game)}\\n\\n➡️ Game ${game + 1} is now unlocked: #${game + 1}`
+              });
+            } else {
+              const commitLine = body.match(/Commit:\s*(https:\\/\\/github\\.com\\/([^\\/]+)\\/([^\\/]+)\\/commit\\/([0-9a-fA-F]{7,40}))/i);
+
+              if (!commitLine) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: `❌ Game 3 needs a valid Commit: URL pointing to the commit that contains final-answer.txt.`
+                });
+                if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
+                  await github.rest.issues.deleteComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: context.payload.comment.id
+                  });
+                }
+                return;
+              }
+
+              const [, commitUrl, commitOwner, commitRepo, sha] = commitLine;
+              let commitData;
+
+              try {
+                const response = await github.rest.repos.getCommit({
+                  owner: commitOwner,
+                  repo: commitRepo,
+                  ref: sha
+                });
+                commitData = response.data;
+              } catch (error) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: `❌ I could not verify that commit. Make sure the URL points to a public GitHub commit.`
+                });
+                if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
+                  await github.rest.issues.deleteComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: context.payload.comment.id
+                  });
+                }
+                return;
+              }
+
+              const hasFinalAnswer = (commitData.files || []).some(file => file.filename === 'final-answer.txt');
+              if (!hasFinalAnswer) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: `❌ The linked commit does not contain final-answer.txt. Create that file in the commit you submit.`
+                });
+                if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
+                  await github.rest.issues.deleteComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: context.payload.comment.id
+                  });
+                }
+                return;
+              }
+
+              if (normalize(submittedAnswer) !== normalize(answers[3])) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: `❌ The answer is not correct yet, ${submittedBy}. Recheck the final clue.`
+                });
+                if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
+                  await github.rest.issues.deleteComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: context.payload.comment.id
+                  });
+                }
+                return;
+              }
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body: `✅ Correct, ${submittedBy}! Game 3 complete. 🎉\\n\\n${passMarker(3)}\\n\\nYour event submission is now ready for organizer verification.`
+              });
+            }
+
+            if (/(^|\\n)TESTING\\b/i.test(rawBody)) {
+              await github.rest.issues.deleteComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id
+              });
+            }
