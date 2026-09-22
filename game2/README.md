@@ -2,12 +2,12 @@
 
 You have reached the Git history challenge.
 
-Your task is to inspect the repository history and identify the exact commit message used by the commit that last modified this README.
+Your task is to inspect the repository history and identify the exact commit message used by the **first commit that modified this Game 2 README**.
 
 ## How to investigate
 
 1. Open the repository's commit history.
-2. Find the latest commit that modified this Game 2 README.
+2. Find the first commit that modified this Game 2 README.
 3. Open that commit.
 4. Copy the exact commit message.
 
